@@ -1,7 +1,8 @@
 from flask import Flask, render_template, redirect, request, url_for, send_file
 from flask import jsonify, json
 from werkzeug.utils import secure_filename
-
+from facenet_pytorch import MTCNN
+mtcnn = MTCNN(device='cuda')
 # Interaction with the OS
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -121,6 +122,7 @@ def im_convert(tensor):
 # For prediction of output  
 def predict(model, img, path='./'):
   # use this command for gpu    
+  print("here in predict")
   fmap, logits = model(img.to('cuda'))
   # fmap, logits = model(img.to())
   params = list(model.parameters())
@@ -150,17 +152,22 @@ class validation_dataset(Dataset):
     a = int(100 / self.count)
     first_frame = np.random.randint(0,a)
     for i, frame in enumerate(self.frame_extract(video_path)):
-      faces = face_recognition.face_locations(frame)
-      try:
-        top,right,bottom,left = faces[0]
-        frame = frame[top:bottom, left:right, :]
-      except:
-        pass
+
+      print(i)
+      boxes, _ = mtcnn.detect(frame)  # Returns bounding boxes and probabilities
+      if boxes is not None:
+        try:
+          box = boxes[0].astype(int)  # Take the first face detected
+          top, left, bottom, right = box
+          frame = frame[top:bottom, left:right, :]
+        except:
+          pass
       frames.append(self.transform(frame))
-      if(len(frames) == self.count):
-        break
+      # if(len(frames) == self.count):
+      #   break
     frames = torch.stack(frames)
     frames = frames[:self.count]
+    print("all frames extracted")
     return frames.unsqueeze(0)
 
   # To extract number of frames
@@ -187,6 +194,7 @@ def detectFakeVideo(videoPath):
 
     video_dataset = validation_dataset(path_to_videos,sequence_length = 20,transform = train_transforms)
     # use this command for gpu
+    print("dataset is dont")
     model = Model(2).cuda()
     # model = Model(2)
     path_to_model = 'model/df_model.pt'
