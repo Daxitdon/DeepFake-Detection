@@ -121,8 +121,8 @@ def im_convert(tensor):
 # For prediction of output  
 def predict(model, img, path='./'):
   # use this command for gpu    
-  # fmap, logits = model(img.to('cuda'))
-  fmap, logits = model(img.to())
+  fmap, logits = model(img.to('cuda'))
+  # fmap, logits = model(img.to())
   params = list(model.parameters())
   weight_softmax = model.linear1.weight.detach().cpu().numpy()
   logits = sm(logits)
@@ -187,8 +187,8 @@ def detectFakeVideo(videoPath):
 
     video_dataset = validation_dataset(path_to_videos,sequence_length = 20,transform = train_transforms)
     # use this command for gpu
-    # model = Model(2).cuda()
-    model = Model(2)
+    model = Model(2).cuda()
+    # model = Model(2)
     path_to_model = 'model/df_model.pt'
     model.load_state_dict(torch.load(path_to_model, map_location=torch.device('cpu')))
     model.eval()
