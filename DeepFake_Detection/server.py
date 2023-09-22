@@ -153,23 +153,34 @@ class validation_dataset(Dataset):
         frames = []
         batch_size = 10  # Define your batch size
         batch_frames = []
+
+        def process_frames(batch_frames):
+            nonlocal frames
+            batch_boxes, _ = mtcnn.detect(batch_frames)  # Detect faces in a batch
+            for j, boxes in enumerate(batch_boxes):
+                if boxes is not None:
+                    print(i)
+                    try:
+                        box = boxes[0].astype(int)  # Take the first face detected
+                        top, left, bottom, right = box
+                        frame = batch_frames[j][top:bottom, left:right, :]
+                        if frame is not None:
+                            frames.append(self.transform(frame))
+                    except:
+                        pass
+                        print("no face found")
+
         for i, frame in enumerate(self.frame_extract(video_path)):
-            print(i)
             batch_frames.append(frame)
             if len(batch_frames) == batch_size:
-                batch_boxes, _ = mtcnn.detect(batch_frames)  # Detect faces in a batch
-                for j, boxes in enumerate(batch_boxes):
-                    if boxes is not None:
-                        try:
-                            box = boxes[0].astype(int)  # Take the first face detected
-                            top, left, bottom, right = box
-                            frame = batch_frames[j][top:bottom, left:right, :]
-                        except:
-                            pass
-                    frames.append(self.transform(frame))
-                    if len(frames) == self.count:
-                        break
+                process_frames(batch_frames)
                 batch_frames = []
+
+        # Process remaining frames in the last batch
+        if len(batch_frames) > 0:
+            process_frames(batch_frames)
+
+        print("length of frames", len(frames))
         frames = torch.stack(frames)
         frames = frames[:self.count]
         print("all frames extracted")
@@ -178,11 +189,23 @@ class validation_dataset(Dataset):
     # To extract number of frames
     def frame_extract(self, path):
         vidObj = cv2.VideoCapture(path)
-        success = 1
-        while success:
+        fps = vidObj.get(cv2.CAP_PROP_FPS)  # Get the video's FPS
+        total_frames = int(vidObj.get(cv2.CAP_PROP_FRAME_COUNT))  # Total frames in the video
+        total_seconds = total_frames / fps  # Total duration of the video in seconds
+
+        # Determine how many frames to extract per second
+        frames_per_second = 1  ## if total_seconds >= 20 else 2
+
+        frame_number = 0
+        while True:
             success, image = vidObj.read()
             if success:
-                yield image
+                if frame_number % int(
+                        fps / frames_per_second) == 0:  # If this frame number is a multiple of the adjusted FPS rate, it's a new frame
+                    yield image
+                frame_number += 1
+            else:
+                break
 
 
 def detectFakeVideo(videoPath):
