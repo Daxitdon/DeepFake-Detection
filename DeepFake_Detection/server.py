@@ -3,7 +3,7 @@ from flask import jsonify, json
 from werkzeug.utils import secure_filename
 from facenet_pytorch import MTCNN
 
-mtcnn = MTCNN(device='cuda')
+mtcnn = MTCNN(device='cpu')
 # Interaction with the OS
 import os
 
@@ -40,7 +40,7 @@ from torch import nn
 # Contains definition for models for addressing different tasks i.e. image classification, object detection e.t.c.
 from torchvision import models
 
-from skimage import img_as_ubyte
+# from skimage import img_as_ubyte
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -53,6 +53,40 @@ detectOutput = []
 app = Flask("__main__", template_folder="templates")
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+
+def detect_time(predictions):
+    output = []
+    current_group = None
+    prev_fake = False
+
+    for frame_index, prediction in predictions:
+
+        if prediction[0] == 0:  # Fake detection
+            if not prev_fake:  # If the previous detection was not fake, start a new group
+                current_group = {'startTime': frame_index - 1, 'endTime': frame_index,
+                                 'totalConfidence': float(prediction[1]), 'count': 1}
+            else:  # If the previous detection was fake, extend the current group
+                current_group['endTime'] = frame_index
+                current_group['totalConfidence'] += float(prediction[1])
+                current_group['count'] += 1
+            prev_fake = True
+        else:  # Real detection
+            if prev_fake and current_group is not None:  # If the previous detection was fake, end the current group
+                current_group['confidence'] = current_group['totalConfidence'] / current_group['count']
+                del current_group['totalConfidence']
+                del current_group['count']
+                output.append(current_group)
+                current_group = None
+            prev_fake = False
+
+    # If the last prediction was a fake detection, add the last group to the output
+    if prev_fake and current_group is not None:
+        current_group['confidence'] = current_group['totalConfidence'] / current_group['count']
+        del current_group['totalConfidence']
+        del current_group['count']
+        output.append(current_group)
+
+    print(output)
 
 # Creating Model Architecture
 
@@ -82,14 +116,19 @@ class Model(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
-        batch_size, seq_length, c, h, w = x.shape
-
-        # new view of array with same data
-        x = x.view(batch_size * seq_length, c, h, w)
+        if len(x.shape) == 5:
+            batch_size, seq_length, c, h, w = x.shape
+            x = x.view(batch_size * seq_length, c, h, w)
+        elif len(x.shape) == 4:  # handle tensors with four dimensions
+            seq_length, c, h, w = x.shape
+            batch_size = 1
+            x = x.view(seq_length, c, h, w)
+        else:
+            raise ValueError(f"Expected input tensor to have 4 or 5 dimensions, got {len(x.shape)}")
 
         fmap = self.model(x)
         x = self.avgpool(fmap)
-        x = x.view(batch_size, seq_length, 2048)
+        x = x.view(batch_size, seq_length, -1)  # use -1 to automatically compute the size of the last dimension
         x_lstm, _ = self.lstm(x, None)
         return fmap, self.dp(self.linear1(x_lstm[:, -1, :]))
 
@@ -122,18 +161,25 @@ def im_convert(tensor):
 
 
 # For prediction of output
-def predict(model, img, path='./'):
-    # use this command for gpu
+def predict(model, frames, frame_indices, path='./'):
+    print("tensor shape: ", frames.shape)
     print("here in predict")
-    fmap, logits = model(img.to('cuda'))
-    # fmap, logits = model(img.to())
-    params = list(model.parameters())
-    weight_softmax = model.linear1.weight.detach().cpu().numpy()
-    logits = sm(logits)
-    _, prediction = torch.max(logits, 1)
-    confidence = logits[:, int(prediction.item())].item() * 100
-    print('confidence of prediction: ', logits[:, int(prediction.item())].item() * 100)
-    return [int(prediction.item()), confidence]
+    frames = frames.squeeze(0)
+    predictions = []
+    for i in range(frames.shape[0]):
+        frame = frames[i]
+        fmap, logits = model(frame.unsqueeze(0).to('cpu'))
+        params = list(model.parameters())
+        weight_softmax = model.linear1.weight.detach().cpu().numpy()
+        logits = sm(logits)
+        _, prediction = torch.max(logits, 1)
+        confidence = logits[:, int(prediction.item())].item() * 100
+
+        confidence = "{:.2f}".format(confidence)
+        print('confidence of prediction: ', logits[:, int(prediction.item())].item() * 100)
+        predictions.append((frame_indices[i], [int(prediction.item()), confidence]))  # use frame index from frame_indices list
+    return predictions
+
 
 
 # To validate the dataset
@@ -141,7 +187,6 @@ class validation_dataset(Dataset):
     def __init__(self, video_names, sequence_length=60, transform=None):
         self.video_names = video_names
         self.transform = transform
-        self.count = sequence_length
 
     # To get number of videos
     def __len__(self):
@@ -154,37 +199,48 @@ class validation_dataset(Dataset):
         batch_size = 10  # Define your batch size
         batch_frames = []
 
-        def process_frames(batch_frames):
+        def process_frames(batch_frames, frame_indices):
             nonlocal frames
-            batch_boxes, _ = mtcnn.detect(batch_frames)  # Detect faces in a batch
+            batch_boxes, _ = mtcnn.detect([frame for _, frame in batch_frames])  # Detect faces in a batch
             for j, boxes in enumerate(batch_boxes):
+                frame_number, frame = batch_frames[j]
                 if boxes is not None:
-                    print(i)
+                    print(frame_number)
                     try:
-                        box = boxes[0].astype(int)  # Take the first face detected
-                        top, left, bottom, right = box
-                        frame = batch_frames[j][top:bottom, left:right, :]
-                        if frame is not None:
-                            frames.append(self.transform(frame))
-                    except:
-                        pass
+                        left, top, right, bottom = boxes[0].astype(int)  # Take the first face detected
+                        # Ensure the coordinates are within the frame dimensions
+                        top = max(0, top)
+                        left = max(0, left)
+                        bottom = min(frame.shape[0], bottom)
+                        right = min(frame.shape[1], right)
+                        frame = frame[top:bottom, left:right, :]
+                    except IndexError:  # Catch errors related to face detection
                         print("no face found")
+                else:
+                    print("Box is none.no face found")
+                # Ensure frame is not None and has valid dimensions before applying the transformation
+                if frame is not None and frame.shape[0] > 0 and frame.shape[1] > 0:
+                    frames.append(self.transform(frame))
+                    frame_indices.append(frame_number)  # Add the frame number to the list
+                else:
+                    print("frame is none")
 
-        for i, frame in enumerate(self.frame_extract(video_path)):
-            batch_frames.append(frame)
+        frame_indices = []
+        for i, frame in enumerate(self.frame_extract(video_path), start=1):
+            batch_frames.append((i, frame))
             if len(batch_frames) == batch_size:
-                process_frames(batch_frames)
+                process_frames(batch_frames, frame_indices)
                 batch_frames = []
 
         # Process remaining frames in the last batch
         if len(batch_frames) > 0:
-            process_frames(batch_frames)
+            process_frames(batch_frames, frame_indices)
 
         print("length of frames", len(frames))
         frames = torch.stack(frames)
-        frames = frames[:self.count]
+        # frames = frames[:self.count]
         print("all frames extracted")
-        return frames.unsqueeze(0)
+        return frames.unsqueeze(0), frame_indices
 
     # To extract number of frames
     def frame_extract(self, path):
@@ -222,19 +278,21 @@ def detectFakeVideo(videoPath):
 
     video_dataset = validation_dataset(path_to_videos, sequence_length=20, transform=train_transforms)
     # use this command for gpu
-    print("dataset is dont")
-    model = Model(2).cuda()
-    # model = Model(2)
+    print("dataset is done")
+    # model = Model(2).cuda()
+    model = Model(2)
     path_to_model = 'model/df_model.pt'
     model.load_state_dict(torch.load(path_to_model, map_location=torch.device('cpu')))
     model.eval()
-    for i in range(0, len(path_to_videos)):
-        print(path_to_videos[i])
-        prediction = predict(model, video_dataset[i], './')
+    frames, frame_indices = video_dataset[0]
+    predictions = predict(model, frames,frame_indices, './')
+    print(predictions)
+    detect_time(predictions)
+    for frame_index, prediction in predictions:
         if prediction[0] == 1:
-            print("REAL")
+            print(f"REAL detection at {frame_index} seconds")
         else:
-            print("FAKE")
+            print(f"FAKE detection at {frame_index} seconds")
     return prediction
 
 
@@ -257,14 +315,14 @@ def DetectPage():
         video_path = "Uploaded_Files/" + video_filename
         prediction = detectFakeVideo(video_path)
         print(prediction)
-        if prediction[0] == 0:
+        if prediction[0][0] == 0:
             output = "FAKE"
         else:
             output = "REAL"
         confidence = prediction[1]
         data = {'output': output, 'confidence': confidence}
         data = json.dumps(data)
-        os.remove(video_path);
+        os.remove(video_path)
         return render_template('index.html', data=data)
 
 
