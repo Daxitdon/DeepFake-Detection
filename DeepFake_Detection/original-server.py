@@ -75,19 +75,22 @@ class Model(nn.Module):
     # Applies 2D average adaptive pooling over an input signal composed of several input planes
     self.avgpool = nn.AdaptiveAvgPool2d(1)
 
-
-
   def forward(self, x):
-    batch_size, seq_length, c, h, w = x.shape
+      if len(x.shape) == 5:
+          batch_size, seq_length, c, h, w = x.shape
+          x = x.view(batch_size * seq_length, c, h, w)
+      elif len(x.shape) == 4:  # handle tensors with four dimensions
+          seq_length, c, h, w = x.shape
+          batch_size = 1
+          x = x.view(seq_length, c, h, w)
+      else:
+          raise ValueError(f"Expected input tensor to have 4 or 5 dimensions, got {len(x.shape)}")
 
-    # new view of array with same data
-    x = x.view(batch_size*seq_length, c, h, w)
-
-    fmap = self.model(x)
-    x = self.avgpool(fmap)
-    x = x.view(batch_size, seq_length, 2048)
-    x_lstm,_ = self.lstm(x, None)
-    return fmap, self.dp(self.linear1(x_lstm[:,-1,:]))
+      fmap = self.model(x)
+      x = self.avgpool(fmap)
+      x = x.view(batch_size, seq_length, 2048)  # use -1 to automatically compute the size of the last dimension
+      x_lstm, _ = self.lstm(x, None)
+      return fmap, self.dp(self.linear1(x_lstm[:, -1, :]))
 
 
 
@@ -118,17 +121,24 @@ def im_convert(tensor):
   return image
 
 # For prediction of output  
-def predict(model, img, path='./'):
-  # use this command for gpu    
-  # fmap, logits = model(img.to('cuda'))
-  fmap, logits = model(img.to())
-  params = list(model.parameters())
-  weight_softmax = model.linear1.weight.detach().cpu().numpy()
-  logits = sm(logits)
-  _, prediction = torch.max(logits, 1)
-  confidence = logits[:, int(prediction.item())].item()*100
-  print('confidence of prediction: ', logits[:, int(prediction.item())].item()*100)
-  return [int(prediction.item()), confidence]
+def predict(model, frames, path='./'):
+    print("tensor shape: ", frames.shape)
+    print("here in predict")
+    frames = frames.squeeze(0)
+    predictions = []
+    for i in range(frames.shape[0]):
+        frame = frames[i]
+        fmap, logits = model(frame.unsqueeze(0).to('cpu'))
+        params = list(model.parameters())
+        weight_softmax = model.linear1.weight.detach().cpu().numpy()
+        logits = sm(logits)
+        _, prediction = torch.max(logits, 1)
+        confidence = logits[:, int(prediction.item())].item() * 100
+
+        confidence = "{:.2f}".format(confidence)
+        print('confidence of prediction: ', logits[:, int(prediction.item())].item() * 100)
+        predictions.append([int(prediction.item()), confidence])  # use frame index from frame_indices list
+    return predictions
 
 
 # To validate the dataset
@@ -156,10 +166,9 @@ class validation_dataset(Dataset):
       except:
         pass
       frames.append(self.transform(frame))
-      if(len(frames) == self.count):
-        break
+
     frames = torch.stack(frames)
-    frames = frames[:self.count]
+
     return frames.unsqueeze(0)
 
   # To extract number of frames
@@ -194,6 +203,7 @@ def detectFakeVideo(videoPath):
     for i in range(0,len(path_to_videos)):
         print(path_to_videos[i])
         prediction = predict(model,video_dataset[i],'./')
+        print(prediction)
         if prediction[0] == 1:
             print("REAL")
         else:
@@ -231,4 +241,4 @@ def DetectPage():
         return render_template('index.html', data=data)
         
 
-app.run(port=3000);
+app.run(host='0.0.0.0',port=3000)
