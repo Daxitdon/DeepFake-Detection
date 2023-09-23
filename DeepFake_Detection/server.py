@@ -87,6 +87,7 @@ def detect_time(predictions):
         output.append(current_group)
 
     print(output)
+    return output
 
 # Creating Model Architecture
 
@@ -287,13 +288,13 @@ def detectFakeVideo(videoPath):
     frames, frame_indices = video_dataset[0]
     predictions = predict(model, frames,frame_indices, './')
     print(predictions)
-    detect_time(predictions)
+    results = detect_time(predictions)
     for frame_index, prediction in predictions:
         if prediction[0] == 1:
             print(f"REAL detection at {frame_index} seconds")
         else:
             print(f"FAKE detection at {frame_index} seconds")
-    return prediction
+    return results
 
 
 @app.route('/', methods=['POST', 'GET'])
@@ -314,15 +315,9 @@ def DetectPage():
         video.save(os.path.join(app.config['UPLOAD_FOLDER'], video_filename))
         video_path = "Uploaded_Files/" + video_filename
         prediction = detectFakeVideo(video_path)
-        print(prediction)
-        if prediction[0][0] == 0:
-            output = "FAKE"
-        else:
-            output = "REAL"
-        confidence = prediction[1]
-        data = {'output': output, 'confidence': confidence}
-        data = json.dumps(data)
+        data = json.dumps(prediction)
         os.remove(video_path)
+        print(data)
         return render_template('index.html', data=data)
 
 
