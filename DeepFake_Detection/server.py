@@ -3,7 +3,7 @@ from flask import Flask, render_template, request
 from flask import json
 from werkzeug.utils import secure_filename
 
-mtcnn = MTCNN(device='cpu')
+mtcnn = MTCNN(device='cuda')
 # Interaction with the OS
 import os
 
@@ -143,7 +143,7 @@ inv_normalize = transforms.Normalize(mean=-1 * np.divide(mean, std), std=np.divi
 
 # For image manipulation
 def im_convert(tensor):
-    image = tensor.to("cpu").clone().detach()
+    image = tensor.to("cuda").clone().detach()
     image = image.squeeze()
     image = inv_normalize(image)
     image = image.numpy()
@@ -161,7 +161,7 @@ def predict(model, frames, frame_indices, path='./'):
     predictions = []
     for i in range(frames.shape[0]):
         frame = frames[i]
-        fmap, logits = model(frame.unsqueeze(0).to('cpu'))
+        fmap, logits = model(frame.unsqueeze(0).to('cuda'))
         logits = sm(logits)
         _, prediction = torch.max(logits, 1)
         confidence = logits[:, int(prediction.item())].item() * 100
@@ -269,10 +269,10 @@ def detectFakeVideo(videoPath):
     video_dataset = validation_dataset(path_to_videos, sequence_length=20, transform=train_transforms)
     # use this command for gpu
     print("dataset is done")
-    # model = Model(2).cuda()
-    model = Model(2)
+    model = Model(2).cuda()
+    # model = Model(2)
     path_to_model = 'model/df_model.pt'
-    model.load_state_dict(torch.load(path_to_model, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(path_to_model, map_location=torch.device('cuda')))
     model.eval()
     frames, frame_indices = video_dataset[0]
     predictions = predict(model, frames,frame_indices, './')
