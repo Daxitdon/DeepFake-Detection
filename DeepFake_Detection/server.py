@@ -1,7 +1,7 @@
-from flask import Flask, render_template, redirect, request, url_for, send_file
-from flask import jsonify, json
-from werkzeug.utils import secure_filename
 from facenet_pytorch import MTCNN
+from flask import Flask, render_template, request
+from flask import json
+from werkzeug.utils import secure_filename
 
 mtcnn = MTCNN(device='cpu')
 # Interaction with the OS
@@ -11,28 +11,20 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 # Used for DL applications, computer vision related processes
 import torch
-import torchvision
 
 # For image preprocessing
 from torchvision import transforms
 
 # Combines dataset & sampler to provide iterable over the dataset
-from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 
 import numpy as np
 import cv2
 
 # To recognise face from extracted frames
-import face_recognition
 
 # Autograd: PyTorch package for differentiation of all operations on Tensors
 # Variable are wrappers around Tensors that allow easy automatic differentiation
-from torch.autograd import Variable
-
-import time
-
-import sys
 
 # 'nn' Help us in creating & training of neural network
 from torch import nn
@@ -170,12 +162,9 @@ def predict(model, frames, frame_indices, path='./'):
     for i in range(frames.shape[0]):
         frame = frames[i]
         fmap, logits = model(frame.unsqueeze(0).to('cpu'))
-        params = list(model.parameters())
-        weight_softmax = model.linear1.weight.detach().cpu().numpy()
         logits = sm(logits)
         _, prediction = torch.max(logits, 1)
         confidence = logits[:, int(prediction.item())].item() * 100
-
         confidence = "{:.2f}".format(confidence)
         print('confidence of prediction: ', logits[:, int(prediction.item())].item() * 100)
         predictions.append((frame_indices[i], [int(prediction.item()), confidence]))  # use frame index from frame_indices list
