@@ -1,2 +1,3 @@
 ./DeepFake_Detection/model*
 ./DeepFake_Detection/Uploaded_Files/*
+./venv/*
